@@ -8,6 +8,8 @@ const USERS = [
 const USER_STORAGE_PREFIX = "wannabe-strava.activities.";
 const CURRENT_USER_KEY = "wannabe-strava.current-user";
 const LEGACY_STORAGE_KEY = "stride.activities.v1";
+const THEME_STORAGE_KEY = "wannabe-strava.theme";
+const ACTIVITY_TYPES = ["run", "bike", "hike", "walk"];
 
 const localDateString = (date) => {
   const year = date.getFullYear();
@@ -32,14 +34,23 @@ const elements = {
   chart: document.querySelector("#distance-chart"),
   chartTotal: document.querySelector("#chart-total"),
   chartCaption: document.querySelector("#chart-caption"),
-  chartPeriod: document.querySelector("#chart-period"),
-  chartPeriodLabel: document.querySelector("#chart-period-label"),
+  chartWeekLabel: document.querySelector("#chart-week-label"),
   goalDistance: document.querySelector("#goal-distance"),
   goalProgress: document.querySelector("#goal-progress-fill"),
   goalProgressBar: document.querySelector(".goal-progress-track"),
   goalMessage: document.querySelector("#goal-message"),
   activities: document.querySelector("#activities-list"),
-  toggleActivities: document.querySelector("#toggle-activities"),
+  feedActivities: document.querySelector("#feed-activities-list"),
+  feedTypeFilter: document.querySelector("#feed-type-filter"),
+  feedWeekFilter: document.querySelector("#feed-week-filter"),
+  progressWeekFilter: document.querySelector("#progress-week-filter"),
+  progressTypeFilter: document.querySelector("#progress-type-filter"),
+  progressWeekLabel: document.querySelector("#progress-week-label"),
+  progressChart: document.querySelector("#progress-chart"),
+  lifetimeChart: document.querySelector("#lifetime-chart"),
+  lifetimeYearFilter: document.querySelector("#lifetime-year-filter"),
+  lifetimeCaption: document.querySelector("#lifetime-chart-caption"),
+  lifetimeLegend: document.querySelector("#lifetime-legend"),
   dialog: document.querySelector("#run-dialog"),
   form: document.querySelector("#run-form"),
   formError: document.querySelector("#form-error"),
@@ -51,9 +62,11 @@ const elements = {
   topbarAvatar: document.querySelector("#topbar-avatar"),
   photoDialog: document.querySelector("#photo-dialog"),
   photoPreview: document.querySelector("#photo-preview"),
+  themeToggle: document.querySelector("#theme-toggle"),
+  themeColor: document.querySelector("#theme-color"),
+  breadcrumbTitle: document.querySelector(".breadcrumb strong"),
 };
 
-let showAllActivities = false;
 let toastTimeout;
 let currentUserId = loadCurrentUser();
 let activities = loadActivities(currentUserId);
@@ -76,7 +89,7 @@ function loadActivities(userId) {
       if (!Array.isArray(userActivities)) {
         throw new Error("Saved activities must be a list.");
       }
-      return userActivities;
+      return userActivities.map(normalizeActivity);
     }
     if (userId !== USERS[0].id) return [];
 
@@ -86,7 +99,9 @@ function loadActivities(userId) {
     if (!Array.isArray(userActivities)) {
       throw new Error("Saved activities must be a list.");
     }
-    const customActivities = userActivities.filter((activity) => !String(activity.id || "").startsWith("starter-"));
+    const customActivities = userActivities
+      .filter((activity) => !String(activity.id || "").startsWith("starter-"))
+      .map(normalizeActivity);
     localStorage.setItem(`${USER_STORAGE_PREFIX}${userId}`, JSON.stringify(customActivities));
     localStorage.removeItem(LEGACY_STORAGE_KEY);
     return customActivities;
@@ -97,12 +112,20 @@ function loadActivities(userId) {
   }
 }
 
-function saveActivities(nextActivities = activities) {
+function normalizeActivity(activity) {
+  return {
+    ...activity,
+    type: ACTIVITY_TYPES.includes(activity.type) ? activity.type : "run",
+    visibility: activity.visibility === "public" ? "public" : "private",
+  };
+}
+
+function saveActivities(nextActivities = activities, userId = currentUserId) {
   try {
-    localStorage.setItem(`${USER_STORAGE_PREFIX}${currentUserId}`, JSON.stringify(nextActivities));
+    localStorage.setItem(`${USER_STORAGE_PREFIX}${userId}`, JSON.stringify(nextActivities));
     return true;
   } catch (error) {
-    console.error("Could not save your run.", error);
+    console.error("Could not save this activity.", error);
     return false;
   }
 }
@@ -135,6 +158,45 @@ function activitiesForWeek(date) {
   });
 }
 
+function weekKey(date) {
+  return localDateString(startOfWeek(date));
+}
+
+function getAllUserActivities() {
+  return USERS.flatMap((user) => loadActivities(user.id).map((activity) => ({ ...activity, ownerId: user.id })));
+}
+
+function weekLabel(key) {
+  const start = dateFromInput(key);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const format = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
+  const includeYear = start.getFullYear() !== new Date().getFullYear()
+    || end.getFullYear() !== new Date().getFullYear();
+  const year = new Intl.DateTimeFormat("en", { year: "numeric" });
+  return `${format.format(start)} – ${format.format(end)}${includeYear ? `, ${year.format(end)}` : ""}`;
+}
+
+function populateWeekOptions(select, records, includeAll = false) {
+  const previous = select.value;
+  const weeks = new Set([weekKey(new Date()), ...records.map((activity) => weekKey(dateFromInput(activity.date)))]);
+  const sortedWeeks = [...weeks].sort((a, b) => b.localeCompare(a));
+  const groups = new Map();
+  sortedWeeks.forEach((week) => {
+    const year = String(dateFromInput(week).getFullYear());
+    if (!groups.has(year)) groups.set(year, []);
+    groups.get(year).push(week);
+  });
+  select.innerHTML = `${includeAll ? '<option value="all">All weeks</option>' : ""}${[...groups]
+    .map(([year, yearWeeks]) => `<optgroup label="${year}">${yearWeeks
+      .map((week) => `<option value="${week}">${week === weekKey(new Date()) ? "This week · " : ""}${weekLabel(week)}</option>`)
+      .join("")}</optgroup>`)
+    .join("")}`;
+  if ([...select.options].some((option) => option.value === previous)) {
+    select.value = previous;
+  }
+}
+
 function formatDistance(distance) {
   return Number(distance).toFixed(1);
 }
@@ -155,7 +217,10 @@ function renderStats() {
   const weeklyActivities = activitiesForWeek(now);
   const distance = weeklyActivities.reduce((total, activity) => total + Number(activity.distance), 0);
   const duration = weeklyActivities.reduce((total, activity) => total + Number(activity.duration), 0);
-  const pace = formatPace(distance, duration);
+  const paceActivities = weeklyActivities.filter((activity) => ["run", "walk", "hike"].includes(activity.type));
+  const paceDistance = paceActivities.reduce((total, activity) => total + Number(activity.distance), 0);
+  const paceDuration = paceActivities.reduce((total, activity) => total + Number(activity.duration), 0);
+  const pace = formatPace(paceDistance, paceDuration);
   const today = new Intl.DateTimeFormat("en", { weekday: "long", month: "long", day: "numeric" }).format(now);
 
   elements.date.textContent = today;
@@ -167,7 +232,7 @@ function renderStats() {
   elements.topbarAvatar.textContent = firstName[0];
   elements.topbarAvatar.setAttribute("aria-label", currentUser.name);
   elements.weekDistance.textContent = formatDistance(distance);
-  elements.weekRuns.textContent = `${weeklyActivities.length} ${weeklyActivities.length === 1 ? "run" : "runs"}`;
+  elements.weekRuns.textContent = `${weeklyActivities.length} ${weeklyActivities.length === 1 ? "activity" : "activities"}`;
   elements.weekTime.textContent = String(duration);
   elements.weekPace.textContent = pace;
 
@@ -197,6 +262,7 @@ function renderWeekChart() {
   const now = new Date();
   const weeklyActivities = activitiesForWeek(now);
   const start = startOfWeek(now);
+  const total = weeklyActivities.reduce((sum, activity) => sum + Number(activity.distance), 0);
   const dailyTotals = Array.from({ length: 7 }, (_, index) => {
     const date = new Date(start);
     date.setDate(date.getDate() + index);
@@ -205,73 +271,213 @@ function renderWeekChart() {
       .reduce((total, activity) => total + Number(activity.distance), 0);
     return { date, distance };
   });
-  const month = elements.chartPeriod.value === "month";
-  const chartDays = month
-    ? Array.from({ length: new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() }, (_, index) => {
-      const date = new Date(now.getFullYear(), now.getMonth(), index + 1);
-      const distance = activities
-        .filter((activity) => sameDay(dateFromInput(activity.date), date))
-        .reduce((total, activity) => total + Number(activity.distance), 0);
-      return { date, distance };
-    })
-    : dailyTotals;
-
-  const maximum = Math.max(...chartDays.map((day) => day.distance), 1);
-  const total = chartDays.reduce((sum, day) => sum + day.distance, 0);
-  const labels = month
-    ? chartDays.map((day, index) => ({ ...day, label: index === 0 || index === chartDays.length - 1 || day.date.getDate() % 5 === 0 ? String(day.date.getDate()) : "" }))
-    : chartDays.map((day) => ({ ...day, label: new Intl.DateTimeFormat("en", { weekday: "short" }).format(day.date) }));
-
-  elements.chart.innerHTML = labels.map((day) => {
+  const maximum = Math.max(...dailyTotals.map((day) => day.distance), 1);
+  elements.chart.innerHTML = dailyTotals.map((day) => {
     const today = sameDay(day.date, now);
     const barHeight = Math.max(day.distance > 0 ? 5 : 0, (day.distance / maximum) * 96);
     const accessibleLabel = `${formatDate(localDateString(day.date))}: ${formatDistance(day.distance)} km`;
     return `<div class="chart-column${today ? " today" : ""}${day.distance > 0 ? " has-run" : ""}" aria-label="${accessibleLabel}">
       <span class="chart-bar-label">${formatDistance(day.distance)} km</span>
       <span class="chart-bar" style="height:${barHeight}px"></span>
-      <span class="chart-day">${day.label}</span>
+      <span class="chart-day">${new Intl.DateTimeFormat("en", { weekday: "short" }).format(day.date)}</span>
     </div>`;
   }).join("");
   elements.chartTotal.innerHTML = `${formatDistance(total)} <span>km</span>`;
-  elements.chartCaption.textContent = month ? "A little progress, all month long." : "Your miles add up. Keep going.";
-  elements.chart.setAttribute("aria-label", `Running distance chart for ${month ? "this month" : "this week"}`);
+  elements.chartCaption.textContent = "Your miles add up. Keep going.";
+  elements.chart.setAttribute("aria-label", "Activity distance chart for this week");
   const weekEnd = new Date(start);
   weekEnd.setDate(weekEnd.getDate() + 6);
-  elements.chartPeriodLabel.textContent = month
-    ? new Intl.DateTimeFormat("en", { month: "long", year: "numeric" }).format(now)
-    : `${new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(start)} – ${new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(weekEnd)}`;
+  elements.chartWeekLabel.textContent = weekLabel(localDateString(start));
+}
+
+function renderProgress() {
+  populateWeekOptions(elements.progressWeekFilter, activities);
+  const selectedWeek = elements.progressWeekFilter.value || weekKey(new Date());
+  const start = dateFromInput(selectedWeek);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  const weekActivities = activities.filter((activity) => {
+    const date = dateFromInput(activity.date);
+    return date >= start && date < end;
+  });
+  const distances = Object.fromEntries(ACTIVITY_TYPES.map((type) => [
+    type,
+    weekActivities.filter((activity) => activity.type === type)
+      .reduce((total, activity) => total + Number(activity.distance), 0),
+  ]));
+  document.querySelector("#progress-run-total").textContent = `${formatDistance(distances.run)} km`;
+  document.querySelector("#progress-bike-total").textContent = `${formatDistance(distances.bike)} km`;
+  document.querySelector("#progress-hike-total").textContent = `${formatDistance(distances.hike)} km`;
+  document.querySelector("#progress-walk-total").textContent = `${formatDistance(distances.walk)} km`;
+  elements.progressWeekFilter.value = selectedWeek;
+  elements.progressWeekLabel.textContent = weekLabel(selectedWeek);
+  const selectedType = elements.progressTypeFilter.value;
+  const displayedActivities = selectedType === "all"
+    ? weekActivities
+    : weekActivities.filter((activity) => activity.type === selectedType);
+  const total = displayedActivities.reduce((sum, activity) => sum + Number(activity.distance), 0);
+  document.querySelector("#progress-total").textContent = `${formatDistance(total)} km`;
+  document.querySelector("#progress-chart-caption").textContent = `${selectedType === "all" ? "All activities" : activityTypeLabel(selectedType)} · ${weekLabel(selectedWeek)}`;
+  const dailyTotals = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(date.getDate() + index);
+    return {
+      date,
+      distance: displayedActivities
+        .filter((activity) => sameDay(dateFromInput(activity.date), date))
+        .reduce((sum, activity) => sum + Number(activity.distance), 0),
+    };
+  });
+  const maximum = Math.max(...dailyTotals.map((day) => day.distance), 1);
+  elements.progressChart.innerHTML = dailyTotals.map((day) => {
+    const barHeight = Math.max(day.distance > 0 ? 5 : 0, (day.distance / maximum) * 96);
+    return `<div class="chart-column${day.distance > 0 ? " has-run" : ""}" aria-label="${formatDate(localDateString(day.date))}: ${formatDistance(day.distance)} km">
+      <span class="chart-bar-label">${formatDistance(day.distance)} km</span>
+      <span class="chart-bar" style="height:${barHeight}px"></span>
+      <span class="chart-day">${new Intl.DateTimeFormat("en", { weekday: "short" }).format(day.date)}</span>
+    </div>`;
+  }).join("");
+  renderLifetimeChart();
+}
+
+function renderLifetimeChart() {
+  const ordered = [...activities].sort((a, b) => a.date.localeCompare(b.date));
+  const years = [...new Set(ordered.map((activity) => dateFromInput(activity.date).getFullYear()))].sort((a, b) => a - b);
+  if (ordered.length === 0) {
+    elements.lifetimeChart.innerHTML = "";
+    elements.lifetimeYearFilter.innerHTML = '<option value="">No recorded years</option>';
+    elements.lifetimeYearFilter.disabled = true;
+    elements.lifetimeLegend.innerHTML = "";
+    elements.lifetimeCaption.textContent = "Log an activity to start your timeline.";
+    elements.lifetimeChart.setAttribute("aria-label", "No recorded activity yet");
+    return;
+  }
+
+  const previousYear = elements.lifetimeYearFilter.value;
+  elements.lifetimeYearFilter.disabled = false;
+  elements.lifetimeYearFilter.innerHTML = years.map((year) => `<option value="${year}">${year}</option>`).join("");
+  const selectedYear = years.includes(Number(previousYear)) ? Number(previousYear) : years[years.length - 1];
+  elements.lifetimeYearFilter.value = String(selectedYear);
+
+  const latestYear = years[years.length - 1];
+  const comparisonYear = selectedYear === latestYear
+    ? [...years].reverse().find((year) => year !== latestYear)
+    : latestYear;
+  const series = [
+    { year: selectedYear, className: "selected-year", label: String(selectedYear) },
+    ...(comparisonYear === undefined
+      ? []
+      : [{ year: comparisonYear, className: "latest-year", label: comparisonYear === latestYear ? `${latestYear} · latest` : String(comparisonYear) }]),
+  ].map((item) => ({
+    ...item,
+    distances: Array.from({ length: 12 }, (_, month) => ordered
+      .filter((activity) => {
+        const date = dateFromInput(activity.date);
+        return date.getFullYear() === item.year && date.getMonth() === month;
+      })
+      .reduce((total, activity) => total + Number(activity.distance), 0)),
+  }));
+
+  const maximum = Math.max(1, ...series.flatMap((item) => item.distances));
+  const chartWidth = Math.max(elements.lifetimeChart.clientWidth, 320);
+  elements.lifetimeChart.setAttribute("viewBox", `0 0 ${chartWidth} 310`);
+  const chart = { left: 52, right: chartWidth - 24, top: 30, bottom: 238 };
+  const x = (month) => chart.left + (month * (chart.right - chart.left)) / 11;
+  const y = (distance) => chart.bottom - (distance / maximum) * (chart.bottom - chart.top);
+  const gridValues = Array.from({ length: 4 }, (_, index) => (maximum * index) / 3);
+  const grid = gridValues.map((value) => {
+    const position = y(value);
+    return `<line class="lifetime-grid-line" x1="${chart.left}" y1="${position}" x2="${chart.right}" y2="${position}" />
+      <text class="lifetime-axis-label" x="${chart.left - 10}" y="${position + 4}" text-anchor="end">${formatDistance(value)}</text>`;
+  }).join("");
+  const monthLabels = Array.from({ length: 12 }, (_, month) => {
+    const label = new Intl.DateTimeFormat("en", { month: "short" }).format(new Date(2025, month, 1));
+    return `<text class="lifetime-axis-label lifetime-month-label" x="${x(month)}" y="${chart.bottom + 25}" text-anchor="middle">${label}</text>`;
+  }).join("");
+  const lines = series.map((item) => {
+    const points = item.distances.map((distance, month) => `${x(month)},${y(distance)}`).join(" ");
+    const markers = item.distances.map((distance, month) => {
+      const label = `${item.year} ${new Intl.DateTimeFormat("en", { month: "long" }).format(new Date(2025, month, 1))}: ${formatDistance(distance)} km`;
+      return `<circle class="lifetime-point" cx="${x(month)}" cy="${y(distance)}" r="4.5"><title>${escapeHtml(label)}</title></circle>`;
+    }).join("");
+    return `<g class="lifetime-series ${item.className}"><polyline class="lifetime-line" points="${points}" />${markers}</g>`;
+  }).join("");
+
+  elements.lifetimeChart.innerHTML = `<g class="lifetime-grid">${grid}</g>
+    <text class="lifetime-axis-title" x="${chart.left}" y="16">Distance (km)</text>
+    <text class="lifetime-axis-title" x="${chart.right}" y="${chart.bottom + 48}" text-anchor="end">Month</text>
+    ${monthLabels}${lines}`;
+  elements.lifetimeLegend.innerHTML = series.map((item) => `<span class="lifetime-legend-item ${item.className}"><i></i>${item.label}</span>`).join("");
+  const totals = series.map((item) => `${item.year}: ${formatDistance(item.distances.reduce((sum, distance) => sum + distance, 0))} km`);
+  elements.lifetimeCaption.textContent = totals.join(" · ");
+  const comparisonDescription = comparisonYear === undefined
+    ? `${selectedYear}`
+    : `${selectedYear} compared with ${comparisonYear}`;
+  elements.lifetimeChart.setAttribute("aria-label", `Monthly activity distance in ${comparisonDescription}`);
+}
+
+function activityTypeLabel(type) {
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)}`;
+}
+
+function activityMarkup(activity, ownerId, showOwner) {
+  const pace = formatPace(Number(activity.distance), Number(activity.duration));
+  const title = escapeHtml(activity.name || `${activityTypeLabel(activity.type)} activity`);
+  const note = activity.note ? `<span class="activity-note">${escapeHtml(activity.note)}</span>` : "";
+  const photo = activity.photo
+    ? `<button class="activity-photo" type="button" data-photo-id="${escapeHtml(activity.id)}" data-photo-owner="${ownerId}" aria-label="View photo from ${title}"><img src="${activity.photo}" alt="" /></button>`
+    : '<span class="activity-photo-placeholder" aria-hidden="true"></span>';
+  const owner = showOwner ? `<span class="activity-owner">${escapeHtml(USERS.find((user) => user.id === ownerId).name)}</span>` : "";
+  const canDelete = ownerId === currentUserId;
+  const visibility = activity.visibility === "public" ? "Public" : "Private";
+  const visibilityControl = ownerId === currentUserId
+    ? `<select class="visibility-select" data-visibility-id="${escapeHtml(activity.id)}" data-visibility-owner="${ownerId}" aria-label="Visibility for ${title}">
+        <option value="private"${activity.visibility === "private" ? " selected" : ""}>Private</option>
+        <option value="public"${activity.visibility === "public" ? " selected" : ""}>Public</option>
+      </select>`
+    : escapeHtml(visibility);
+  const paceDetail = activity.type === "run" || activity.type === "walk" || activity.type === "hike"
+    ? ` · ${pace} /km`
+    : "";
+  return `<article class="activity-row">
+    <span class="activity-icon activity-icon-${activity.type}" aria-hidden="true">${activityTypeIcon(activity.type)}</span>
+    <div class="activity-main"><strong>${title}</strong>${owner}<span>${activityTypeLabel(activity.type)} · ${formatDate(activity.date)} · ${activity.duration} min${paceDetail}</span>${note}</div>
+    ${photo}
+    <div class="activity-distance"><strong>${formatDistance(Number(activity.distance))} km</strong><span>${visibilityControl}</span></div>
+    <div class="activity-elevation">↗ ${Number(activity.elevation) || 0} m</div>
+    ${canDelete ? `<button class="delete-activity" type="button" data-delete-id="${escapeHtml(activity.id)}" data-delete-owner="${ownerId}" aria-label="Remove ${title}">×</button>` : '<span class="delete-placeholder"></span>'}
+  </article>`;
+}
+
+function activityTypeIcon(type) {
+  return { run: "↗", bike: "⌁", hike: "△", walk: "→" }[type] || "↗";
 }
 
 function renderActivities() {
   const orderedActivities = [...activities].sort((a, b) => b.date.localeCompare(a.date));
-  const visibleActivities = showAllActivities ? orderedActivities : orderedActivities.slice(0, 3);
+  const visibleActivities = orderedActivities.slice(0, 3);
   if (visibleActivities.length === 0) {
     elements.activities.innerHTML = '<p class="empty-activities">Your next run could be the first one. Go make it yours.</p>';
-    elements.toggleActivities.hidden = true;
-    return;
+  } else {
+    elements.activities.innerHTML = visibleActivities.map((activity) => activityMarkup(activity, currentUserId, false)).join("");
   }
+  renderPublicActivities();
+}
 
-  elements.toggleActivities.hidden = orderedActivities.length <= 3;
-  elements.toggleActivities.innerHTML = showAllActivities
-    ? 'Show less <span aria-hidden="true">↖</span>'
-    : 'View all <span aria-hidden="true">↗</span>';
+function renderPublicActivities() {
+  const allActivities = getAllUserActivities();
+  populateWeekOptions(elements.feedWeekFilter, allActivities, true);
+  const type = elements.feedTypeFilter.value;
+  const week = elements.feedWeekFilter.value;
+  const visibleActivities = allActivities
+    .filter((activity) => activity.ownerId === currentUserId || activity.visibility === "public")
+    .filter((activity) => type === "all" || activity.type === type)
+    .filter((activity) => week === "all" || weekKey(dateFromInput(activity.date)) === week)
+    .sort((a, b) => b.date.localeCompare(a.date));
 
-  elements.activities.innerHTML = visibleActivities.map((activity) => {
-    const pace = formatPace(Number(activity.distance), Number(activity.duration));
-    const title = escapeHtml(activity.name || "Run");
-    const note = activity.note ? `<span class="activity-note">${escapeHtml(activity.note)}</span>` : "";
-    const photo = activity.photo
-      ? `<button class="activity-photo" type="button" data-photo-id="${escapeHtml(activity.id)}" aria-label="View photo from ${title}"><img src="${activity.photo}" alt="" /></button>`
-      : '<span class="activity-photo-placeholder" aria-hidden="true"></span>';
-    return `<article class="activity-row">
-      <span class="activity-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17.5 8.2 8l3.2 7 2.6-4.5 5.8 7"/></svg></span>
-      <div class="activity-main"><strong>${title}</strong><span>${formatDate(activity.date)} · ${activity.duration} min · ${pace} /km</span>${note}</div>
-      ${photo}
-      <div class="activity-distance"><strong>${formatDistance(Number(activity.distance))} km</strong><span>${pace} /km</span></div>
-      <div class="activity-elevation">↗ ${Number(activity.elevation) || 0} m</div>
-      <button class="delete-activity" type="button" data-delete-id="${escapeHtml(activity.id)}" aria-label="Remove ${title}">×</button>
-    </article>`;
-  }).join("");
+  elements.feedActivities.innerHTML = visibleActivities.length
+    ? visibleActivities.map((activity) => activityMarkup(activity, activity.ownerId, true)).join("")
+    : '<p class="empty-activities">No activities match these filters yet. Public activities from other profiles will appear here.</p>';
 }
 
 function escapeHtml(value) {
@@ -283,7 +489,46 @@ function escapeHtml(value) {
 function render() {
   renderStats();
   renderWeekChart();
+  renderProgress();
   renderActivities();
+}
+
+function navigateToView(viewName, updateHistory = true) {
+  if (!["overview", "activities", "progress"].includes(viewName)) return;
+  document.querySelectorAll("[data-view]").forEach((view) => {
+    view.hidden = view.dataset.view !== viewName;
+  });
+  document.querySelectorAll(".nav-link[data-view-target]").forEach((link) => {
+    const active = link.dataset.viewTarget === viewName;
+    link.classList.toggle("active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
+  elements.breadcrumbTitle.textContent = viewName === "overview" ? "Overview" : activityTypeLabel(viewName);
+  if (updateHistory && window.location.hash !== `#${viewName}-view`) {
+    window.history.pushState(null, "", `#${viewName}-view`);
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (viewName === "activities") renderPublicActivities();
+  if (viewName === "progress") renderProgress();
+}
+
+function applyTheme(theme, persist = false) {
+  const dark = theme === "dark";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  elements.themeToggle.innerHTML = `<span aria-hidden="true">${dark ? "☀" : "☾"}</span>`;
+  const label = `Switch to ${dark ? "light" : "dark"} mode`;
+  elements.themeToggle.setAttribute("aria-label", label);
+  elements.themeToggle.title = label;
+  elements.themeColor.content = dark ? "#181a17" : "#f7f7f2";
+  if (persist) {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, dark ? "dark" : "light");
+    } catch (error) {
+      console.error("Could not save the theme preference.", error);
+      showToast("Theme changed, but this browser could not remember it.");
+    }
+  }
 }
 
 function showToast(message) {
@@ -324,13 +569,48 @@ document.querySelector("#open-log-run").addEventListener("click", () => {
   elements.dialog.showModal();
 });
 
+document.querySelectorAll("[data-open-log-run]").forEach((button) => {
+  button.addEventListener("click", () => document.querySelector("#open-log-run").click());
+});
+
+document.querySelectorAll(".nav-link[data-view-target]").forEach((link) => {
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    navigateToView(link.dataset.viewTarget);
+  });
+});
+
+window.addEventListener("popstate", () => {
+  const viewName = window.location.hash.replace("#", "").replace("-view", "");
+  navigateToView(["overview", "activities", "progress"].includes(viewName) ? viewName : "overview", false);
+});
+
+document.querySelectorAll("[data-open-view]").forEach((button) => {
+  button.addEventListener("click", () => navigateToView(button.dataset.openView));
+});
+
+document.querySelector(".brand").addEventListener("click", (event) => {
+  event.preventDefault();
+  navigateToView("overview");
+});
+
+elements.themeToggle.addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark", true);
+});
+
+try {
+  applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || "light");
+} catch (error) {
+  console.error("Could not load the saved theme preference.", error);
+  applyTheme("light");
+}
+
 elements.userSelect.value = currentUserId;
 elements.userSelect.addEventListener("change", () => {
   const nextUserId = elements.userSelect.value;
   if (!USERS.some((user) => user.id === nextUserId)) return;
   currentUserId = nextUserId;
   activities = loadActivities(currentUserId);
-  showAllActivities = false;
   try {
     localStorage.setItem(CURRENT_USER_KEY, currentUserId);
   } catch (error) {
@@ -348,58 +628,70 @@ document.querySelector("#close-photo").addEventListener("click", () => elements.
 elements.photoDialog.addEventListener("click", (event) => {
   if (event.target === elements.photoDialog) elements.photoDialog.close();
 });
-elements.activities.addEventListener("click", (event) => {
+function handleActivityListClick(event) {
   const deleteButton = event.target.closest("[data-delete-id]");
   if (deleteButton) {
-    const activity = activities.find((item) => item.id === deleteButton.dataset.deleteId);
-    if (!activity || !window.confirm(`Remove “${activity.name || "Run"}” from ${USERS.find((user) => user.id === currentUserId).name}'s activities?`)) {
+    const ownerId = deleteButton.dataset.deleteOwner || currentUserId;
+    const ownerName = USERS.find((user) => user.id === ownerId)?.name || "this user";
+    const ownerActivities = loadActivities(ownerId);
+    const activity = ownerActivities.find((item) => item.id === deleteButton.dataset.deleteId);
+    if (ownerId !== currentUserId || !activity || !window.confirm(`Remove “${activity.name || "activity"}” from ${ownerName}'s activities?`)) {
       return;
     }
-    const nextActivities = activities.filter((item) => item.id !== activity.id);
-    if (!saveActivities(nextActivities)) {
-      showToast("Could not remove this run. Please check browser storage and try again.");
+    const nextActivities = ownerActivities.filter((item) => item.id !== activity.id);
+    if (!saveActivities(nextActivities, ownerId)) {
+      showToast("Could not remove this activity. Please check browser storage and try again.");
       return;
     }
-    activities = nextActivities;
+    if (ownerId === currentUserId) activities = nextActivities;
     render();
-    showToast("Run removed.");
+    showToast("Activity removed.");
     return;
   }
   const photoButton = event.target.closest("[data-photo-id]");
   if (photoButton) {
-    const activity = activities.find((item) => item.id === photoButton.dataset.photoId);
+    const ownerId = photoButton.dataset.photoOwner || currentUserId;
+    const activity = loadActivities(ownerId).find((item) => item.id === photoButton.dataset.photoId);
     if (!activity?.photo) return;
     elements.photoPreview.src = activity.photo;
     elements.photoDialog.showModal();
   }
-});
-elements.chartPeriod.addEventListener("change", renderWeekChart);
-elements.toggleActivities.addEventListener("click", () => {
-  showAllActivities = !showAllActivities;
-  renderActivities();
-});
+}
 
-document.querySelectorAll("[data-scroll-target]").forEach((link) => {
-  link.addEventListener("click", (event) => {
-    event.preventDefault();
-    document.querySelector(link.dataset.scrollTarget).scrollIntoView({ behavior: "smooth", block: "start" });
-    document.querySelectorAll(".nav-link").forEach((item) => {
-      item.classList.remove("active");
-      item.removeAttribute("aria-current");
-    });
-    link.classList.add("active");
-    link.setAttribute("aria-current", "page");
-  });
-});
+function handleActivityVisibilityChange(event) {
+  const select = event.target.closest("[data-visibility-id]");
+  if (!select) return;
+  const ownerId = select.dataset.visibilityOwner;
+  const ownerActivities = loadActivities(ownerId);
+  const target = ownerActivities.find((activity) => activity.id === select.dataset.visibilityId);
+  if (ownerId !== currentUserId || !target) {
+    showToast("You can only change visibility on your own activities.");
+    render();
+    return;
+  }
 
-document.querySelector('[href="#dashboard"]').addEventListener("click", () => {
-  document.querySelectorAll(".nav-link").forEach((item) => {
-    item.classList.remove("active");
-    item.removeAttribute("aria-current");
-  });
-  document.querySelector('[href="#dashboard"]').classList.add("active");
-  document.querySelector('[href="#dashboard"]').setAttribute("aria-current", "page");
-});
+  const nextActivities = ownerActivities.map((activity) => activity.id === target.id
+    ? { ...activity, visibility: select.value === "public" ? "public" : "private" }
+    : activity);
+  if (!saveActivities(nextActivities, ownerId)) {
+    showToast("Could not update activity visibility. Please check browser storage.");
+    render();
+    return;
+  }
+  activities = nextActivities;
+  render();
+  showToast(`Activity is now ${target.visibility === "public" ? "private" : "public"}.`);
+}
+
+elements.activities.addEventListener("click", handleActivityListClick);
+elements.feedActivities.addEventListener("click", handleActivityListClick);
+elements.activities.addEventListener("change", handleActivityVisibilityChange);
+elements.feedActivities.addEventListener("change", handleActivityVisibilityChange);
+elements.feedTypeFilter.addEventListener("change", renderPublicActivities);
+elements.feedWeekFilter.addEventListener("change", renderPublicActivities);
+elements.progressWeekFilter.addEventListener("change", renderProgress);
+elements.progressTypeFilter.addEventListener("change", renderProgress);
+elements.lifetimeYearFilter.addEventListener("change", renderLifetimeChart);
 
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -419,11 +711,16 @@ elements.form.addEventListener("submit", async (event) => {
     && dateValue.getDate() === dateParts[2];
 
   if (!Number.isFinite(distance) || distance <= 0 || distance > 300 || !Number.isFinite(duration) || duration <= 0 || duration > 1440 || !validDate) {
-    elements.formError.textContent = "Add a valid distance, duration, and date to save your run.";
+    elements.formError.textContent = "Add a valid distance, duration, and date to save this activity.";
+    return;
+  }
+  const type = String(formData.get("activityType"));
+  if (!ACTIVITY_TYPES.includes(type)) {
+    elements.formError.textContent = "Choose Run, Bike, Hike, or Walk for this activity.";
     return;
   }
   if (dateValue > new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
-    elements.formError.textContent = "Run dates can’t be in the future.";
+    elements.formError.textContent = "Activity dates can’t be in the future.";
     return;
   }
 
@@ -437,7 +734,9 @@ elements.form.addEventListener("submit", async (event) => {
 
   const activity = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    name: String(formData.get("name") || "").trim() || "Run",
+    name: String(formData.get("name") || "").trim() || `${activityTypeLabel(type)} activity`,
+    type,
+    visibility: formData.get("visibility") === "public" ? "public" : "private",
     distance,
     duration,
     elevation,
@@ -447,15 +746,16 @@ elements.form.addEventListener("submit", async (event) => {
   };
   const nextActivities = [activity, ...activities];
   if (!saveActivities(nextActivities)) {
-    elements.formError.textContent = "Your run or photo could not be saved in this browser. Try a smaller photo or check available storage.";
+    elements.formError.textContent = "Your activity or photo could not be saved in this browser. Try a smaller photo or check available storage.";
     return;
   }
   activities = nextActivities;
   elements.form.reset();
   elements.dialog.close();
-  showAllActivities = true;
   render();
-  showToast("Run saved. Nice work showing up!");
+  showToast("Activity saved. Nice work showing up!");
 });
 
 render();
+const initialView = window.location.hash.replace("#", "").replace("-view", "");
+navigateToView(["overview", "activities", "progress"].includes(initialView) ? initialView : "overview");
