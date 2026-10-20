@@ -1,4 +1,13 @@
-const STORAGE_KEY = "stride.activities.v1";
+const USERS = [
+  { id: "jamie", name: "Jamie Parker" },
+  { id: "alex", name: "Alex Morgan" },
+  { id: "taylor", name: "Taylor Reed" },
+  { id: "sam", name: "Sam Rivera" },
+  { id: "casey", name: "Casey Brooks" },
+];
+const USER_STORAGE_PREFIX = "wannabe-strava.activities.";
+const CURRENT_USER_KEY = "wannabe-strava.current-user";
+const LEGACY_STORAGE_KEY = "stride.activities.v1";
 
 const localDateString = (date) => {
   const year = date.getFullYear();
@@ -12,16 +21,6 @@ const relativeDate = (daysAgo) => {
   date.setDate(date.getDate() - daysAgo);
   return localDateString(date);
 };
-
-const starterActivities = [
-  { id: "starter-1", distance: 4.8, duration: 29, elevation: 32, date: relativeDate(0), note: "A little fresh air to start the day." },
-  { id: "starter-2", distance: 6.2, duration: 38, elevation: 54, date: relativeDate(1), note: "Found a new favorite route." },
-  { id: "starter-3", distance: 3.6, duration: 22, elevation: 18, date: relativeDate(3), note: "Easy miles, good vibes." },
-  { id: "starter-4", distance: 8.1, duration: 51, elevation: 76, date: relativeDate(5), note: "Went a little further than planned." },
-  { id: "starter-5", distance: 5.4, duration: 34, elevation: 41, date: relativeDate(8), note: "" },
-  { id: "starter-6", distance: 7.2, duration: 44, elevation: 62, date: relativeDate(10), note: "" },
-  { id: "starter-7", distance: 4.1, duration: 25, elevation: 27, date: relativeDate(12), note: "" },
-];
 
 const elements = {
   date: document.querySelector("#today-date"),
@@ -45,33 +44,62 @@ const elements = {
   form: document.querySelector("#run-form"),
   formError: document.querySelector("#form-error"),
   toast: document.querySelector("#toast"),
+  userSelect: document.querySelector("#user-select"),
+  profileName: document.querySelector("#profile-name"),
+  welcomeName: document.querySelector("#welcome-name"),
+  avatar: document.querySelector(".avatar"),
+  topbarAvatar: document.querySelector("#topbar-avatar"),
+  photoDialog: document.querySelector("#photo-dialog"),
+  photoPreview: document.querySelector("#photo-preview"),
 };
 
 let showAllActivities = false;
 let toastTimeout;
+let currentUserId = loadCurrentUser();
+let activities = loadActivities(currentUserId);
 
-function loadActivities() {
+function loadCurrentUser() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved === null) {
-      return starterActivities;
-    }
-    const activities = JSON.parse(saved);
-    if (!Array.isArray(activities)) {
-      throw new Error("Saved activities must be a list.");
-    }
-    return activities;
+    const savedUserId = localStorage.getItem(CURRENT_USER_KEY);
+    return USERS.some((user) => user.id === savedUserId) ? savedUserId : USERS[0].id;
   } catch (error) {
-    console.error("Could not load your saved runs.", error);
-    return starterActivities;
+    console.error("Could not load the selected demo user.", error);
+    return USERS[0].id;
   }
 }
 
-let activities = loadActivities();
-
-function saveActivities() {
+function loadActivities(userId) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+    const saved = localStorage.getItem(`${USER_STORAGE_PREFIX}${userId}`);
+    if (saved !== null) {
+      const userActivities = JSON.parse(saved);
+      if (!Array.isArray(userActivities)) {
+        throw new Error("Saved activities must be a list.");
+      }
+      return userActivities;
+    }
+    if (userId !== USERS[0].id) return [];
+
+    const legacySaved = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacySaved === null) return [];
+    const userActivities = JSON.parse(legacySaved);
+    if (!Array.isArray(userActivities)) {
+      throw new Error("Saved activities must be a list.");
+    }
+    const customActivities = userActivities.filter((activity) => !String(activity.id || "").startsWith("starter-"));
+    localStorage.setItem(`${USER_STORAGE_PREFIX}${userId}`, JSON.stringify(customActivities));
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+    return customActivities;
+  } catch (error) {
+    console.error(`Could not load saved runs for ${userId}.`, error);
+    showToast("Could not load this user's saved runs.");
+    return [];
+  }
+}
+
+function saveActivities(nextActivities = activities) {
+  try {
+    localStorage.setItem(`${USER_STORAGE_PREFIX}${currentUserId}`, JSON.stringify(nextActivities));
     return true;
   } catch (error) {
     console.error("Could not save your run.", error);
@@ -131,6 +159,13 @@ function renderStats() {
   const today = new Intl.DateTimeFormat("en", { weekday: "long", month: "long", day: "numeric" }).format(now);
 
   elements.date.textContent = today;
+  const currentUser = USERS.find((user) => user.id === currentUserId);
+  const firstName = currentUser.name.split(" ")[0];
+  elements.profileName.textContent = currentUser.name;
+  elements.welcomeName.textContent = firstName;
+  elements.avatar.textContent = firstName[0];
+  elements.topbarAvatar.textContent = firstName[0];
+  elements.topbarAvatar.setAttribute("aria-label", currentUser.name);
   elements.weekDistance.textContent = formatDistance(distance);
   elements.weekRuns.textContent = `${weeklyActivities.length} ${weeklyActivities.length === 1 ? "run" : "runs"}`;
   elements.weekTime.textContent = String(duration);
@@ -223,12 +258,18 @@ function renderActivities() {
 
   elements.activities.innerHTML = visibleActivities.map((activity) => {
     const pace = formatPace(Number(activity.distance), Number(activity.duration));
-    const title = activity.note ? escapeHtml(activity.note) : "Morning run";
+    const title = escapeHtml(activity.name || "Run");
+    const note = activity.note ? `<span class="activity-note">${escapeHtml(activity.note)}</span>` : "";
+    const photo = activity.photo
+      ? `<button class="activity-photo" type="button" data-photo-id="${escapeHtml(activity.id)}" aria-label="View photo from ${title}"><img src="${activity.photo}" alt="" /></button>`
+      : '<span class="activity-photo-placeholder" aria-hidden="true"></span>';
     return `<article class="activity-row">
       <span class="activity-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 17.5 8.2 8l3.2 7 2.6-4.5 5.8 7"/></svg></span>
-      <div class="activity-main"><strong>${title}</strong><span>${formatDate(activity.date)} · ${activity.duration} min · ${pace} /km</span></div>
+      <div class="activity-main"><strong>${title}</strong><span>${formatDate(activity.date)} · ${activity.duration} min · ${pace} /km</span>${note}</div>
+      ${photo}
       <div class="activity-distance"><strong>${formatDistance(Number(activity.distance))} km</strong><span>${pace} /km</span></div>
       <div class="activity-elevation">↗ ${Number(activity.elevation) || 0} m</div>
+      <button class="delete-activity" type="button" data-delete-id="${escapeHtml(activity.id)}" aria-label="Remove ${title}">×</button>
     </article>`;
   }).join("");
 }
@@ -252,6 +293,30 @@ function showToast(message) {
   toastTimeout = setTimeout(() => elements.toast.classList.remove("visible"), 2800);
 }
 
+async function readActivityPhoto(file) {
+  if (!file || file.size === 0) return "";
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Choose an image file for your activity photo.");
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error("Activity photos must be 5 MB or smaller.");
+  }
+
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, 1000 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Your browser could not prepare that photo.");
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.75);
+  } finally {
+    bitmap.close();
+  }
+}
+
 document.querySelector("#open-log-run").addEventListener("click", () => {
   const dateField = elements.form.elements.namedItem("date");
   dateField.value = relativeDate(0);
@@ -259,9 +324,54 @@ document.querySelector("#open-log-run").addEventListener("click", () => {
   elements.dialog.showModal();
 });
 
+elements.userSelect.value = currentUserId;
+elements.userSelect.addEventListener("change", () => {
+  const nextUserId = elements.userSelect.value;
+  if (!USERS.some((user) => user.id === nextUserId)) return;
+  currentUserId = nextUserId;
+  activities = loadActivities(currentUserId);
+  showAllActivities = false;
+  try {
+    localStorage.setItem(CURRENT_USER_KEY, currentUserId);
+  } catch (error) {
+    console.error("Could not remember the selected demo user.", error);
+    showToast("Profile switched, but this browser could not remember it.");
+  }
+  render();
+});
+
 document.querySelector("#close-dialog").addEventListener("click", () => elements.dialog.close());
 elements.dialog.addEventListener("click", (event) => {
   if (event.target === elements.dialog) elements.dialog.close();
+});
+document.querySelector("#close-photo").addEventListener("click", () => elements.photoDialog.close());
+elements.photoDialog.addEventListener("click", (event) => {
+  if (event.target === elements.photoDialog) elements.photoDialog.close();
+});
+elements.activities.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-delete-id]");
+  if (deleteButton) {
+    const activity = activities.find((item) => item.id === deleteButton.dataset.deleteId);
+    if (!activity || !window.confirm(`Remove “${activity.name || "Run"}” from ${USERS.find((user) => user.id === currentUserId).name}'s activities?`)) {
+      return;
+    }
+    const nextActivities = activities.filter((item) => item.id !== activity.id);
+    if (!saveActivities(nextActivities)) {
+      showToast("Could not remove this run. Please check browser storage and try again.");
+      return;
+    }
+    activities = nextActivities;
+    render();
+    showToast("Run removed.");
+    return;
+  }
+  const photoButton = event.target.closest("[data-photo-id]");
+  if (photoButton) {
+    const activity = activities.find((item) => item.id === photoButton.dataset.photoId);
+    if (!activity?.photo) return;
+    elements.photoPreview.src = activity.photo;
+    elements.photoDialog.showModal();
+  }
 });
 elements.chartPeriod.addEventListener("change", renderWeekChart);
 elements.toggleActivities.addEventListener("click", () => {
@@ -291,7 +401,7 @@ document.querySelector('[href="#dashboard"]').addEventListener("click", () => {
   document.querySelector('[href="#dashboard"]').setAttribute("aria-current", "page");
 });
 
-elements.form.addEventListener("submit", (event) => {
+elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   elements.formError.textContent = "";
   const formData = new FormData(elements.form);
@@ -301,8 +411,14 @@ elements.form.addEventListener("submit", (event) => {
   const date = formData.get("date");
   const dateValue = dateFromInput(date);
   const today = new Date();
+  const dateParts = date.split("-").map(Number);
+  const validDate = dateParts.length === 3
+    && dateParts[0] > 0
+    && dateValue.getFullYear() === dateParts[0]
+    && dateValue.getMonth() === dateParts[1] - 1
+    && dateValue.getDate() === dateParts[2];
 
-  if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(duration) || duration <= 0 || Number.isNaN(dateValue.getTime())) {
+  if (!Number.isFinite(distance) || distance <= 0 || distance > 300 || !Number.isFinite(duration) || duration <= 0 || duration > 1440 || !validDate) {
     elements.formError.textContent = "Add a valid distance, duration, and date to save your run.";
     return;
   }
@@ -311,21 +427,30 @@ elements.form.addEventListener("submit", (event) => {
     return;
   }
 
+  let photo;
+  try {
+    photo = await readActivityPhoto(formData.get("photo"));
+  } catch (error) {
+    elements.formError.textContent = error.message || "Could not read that activity photo.";
+    return;
+  }
+
   const activity = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: String(formData.get("name") || "").trim() || "Run",
     distance,
     duration,
     elevation,
     date,
     note: String(formData.get("note") || "").trim(),
+    photo,
   };
-  activities = [activity, ...activities];
-  if (!saveActivities()) {
-    activities.shift();
-    elements.formError.textContent = "Your run couldn’t be saved in this browser. Please check available storage and try again.";
+  const nextActivities = [activity, ...activities];
+  if (!saveActivities(nextActivities)) {
+    elements.formError.textContent = "Your run or photo could not be saved in this browser. Try a smaller photo or check available storage.";
     return;
   }
-
+  activities = nextActivities;
   elements.form.reset();
   elements.dialog.close();
   showAllActivities = true;

@@ -8,7 +8,7 @@
       name="description"
       content="A fresh, friendly place to track your running and celebrate every mile."
     />
-    <title>Stride — Your running, your rhythm</title>
+    <title>wannabe-strava — Your running, your rhythm</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -21,14 +21,14 @@
   <body>
     <div class="app-shell">
       <aside class="sidebar" aria-label="Main navigation">
-        <a class="brand" href="#dashboard" aria-label="Stride home">
+        <a class="brand" href="#dashboard" aria-label="wannabe-strava home">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" fill="none">
               <path d="M6 23.5 13.4 8h5.2L12 23.5H6Z" fill="currentColor" />
               <path d="M15.1 23.5 22.5 8h3.7L18.8 23.5h-3.7Z" fill="currentColor" opacity=".55" />
             </svg>
           </span>
-          <span>stride<span class="brand-period">.</span></span>
+          <span>wannabe-strava<span class="brand-period">.</span></span>
         </a>
 
         <span class="nav-label">MENU</span>
@@ -53,11 +53,18 @@
             <p>Small steps.<br /><strong>Big energy.</strong></p>
             <span class="note-decoration" aria-hidden="true">↗</span>
           </div>
-          <button class="profile-button" type="button" aria-label="Runner profile">
+          <label class="profile-button" for="user-select" aria-label="Select demo user">
             <span class="avatar">J</span>
-            <span class="profile-copy"><strong>Jamie Parker</strong><span>Runner</span></span>
+            <span class="profile-copy"><strong id="profile-name">Jamie Parker</strong><span>Demo user</span></span>
+            <select id="user-select" aria-label="Switch user">
+              <option value="jamie">Jamie Parker</option>
+              <option value="alex">Alex Morgan</option>
+              <option value="taylor">Taylor Reed</option>
+              <option value="sam">Sam Rivera</option>
+              <option value="casey">Casey Brooks</option>
+            </select>
             <svg class="profile-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
-          </button>
+          </label>
         </div>
       </aside>
 
@@ -66,7 +73,7 @@
           <div class="breadcrumb"><span>MY SPACE</span><span class="breadcrumb-divider">/</span><strong>Overview</strong></div>
           <div class="topbar-right">
             <span class="today-date" id="today-date"></span>
-            <span class="topbar-avatar" aria-label="Jamie Parker">J</span>
+            <span class="topbar-avatar" id="topbar-avatar" aria-label="Jamie Parker">J</span>
           </div>
         </header>
 
@@ -74,7 +81,7 @@
           <section class="welcome-row" aria-labelledby="welcome-title">
             <div>
               <div class="eyebrow"><span class="live-dot"></span> YOUR RUNNING JOURNAL</div>
-              <h1 id="welcome-title">Keep showing up, Jamie<span class="title-spark">✳</span></h1>
+              <h1 id="welcome-title">Keep showing up, <span id="welcome-name">Jamie</span><span class="title-spark">✳</span></h1>
               <p class="welcome-subtitle">Every run counts. Here's how your week is looking.</p>
             </div>
             <button class="primary-button" id="open-log-run" type="button">
@@ -155,6 +162,7 @@
           <button class="icon-button" id="close-dialog" type="button" aria-label="Close">×</button>
         </div>
         <p class="dialog-intro">A little record of a big effort. You showed up — that’s what matters.</p>
+        <label class="form-field">Activity name <input name="name" type="text" maxlength="50" placeholder="Evening loop" /></label>
         <label class="form-field">Distance <span class="input-with-unit"><input name="distance" type="number" min="0.1" max="300" step="0.1" placeholder="5.0" required /><span>km</span></span></label>
         <div class="form-row">
           <label class="form-field">Duration <span class="input-with-unit"><input name="duration" type="number" min="1" max="1440" step="1" placeholder="30" required /><span>min</span></span></label>
@@ -162,9 +170,14 @@
         </div>
         <label class="form-field">When did you run? <input name="date" type="date" required /></label>
         <label class="form-field">A note for this run <span class="optional-label">OPTIONAL</span><input name="note" type="text" maxlength="90" placeholder="The park was extra green today..." /></label>
+        <label class="form-field">Add a photo <span class="optional-label">OPTIONAL · 5 MB MAX</span><input name="photo" type="file" accept="image/*" /></label>
         <div class="form-error" id="form-error" role="alert"></div>
         <button class="primary-button submit-run" type="submit">Save this run <span aria-hidden="true">↗</span></button>
       </form>
+    </dialog>
+    <dialog class="photo-dialog" id="photo-dialog" aria-label="Activity photo">
+      <button class="icon-button" id="close-photo" type="button" aria-label="Close photo">×</button>
+      <img id="photo-preview" alt="Photo from this activity" />
     </dialog>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </body>
